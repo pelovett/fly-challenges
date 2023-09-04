@@ -28,14 +28,12 @@ func getMsgArr(msgMap *map[int]struct{}) []int {
 
 func broadCastNewMsgs(src string, n *maelstrom.Node, newMsgs []int, stateHash string, dests []string) error {
 	msgContent := map[string]any{
-		"type":    "broadcast",
-		"message": newMsgs[0],
-		"body": map[string]any{
-			"stateHash": stateHash,
-		},
+		"type":      "broadcast",
+		"message":   newMsgs[0],
+		"stateHash": stateHash,
 	}
 	if len(newMsgs) > 1 {
-		msgContent["body"].(map[string]any)["otherMessages"] = newMsgs[1:]
+		msgContent["otherMessages"] = newMsgs[1:]
 	}
 
 	for _, node := range dests {
@@ -79,7 +77,8 @@ func checkOtherState(syncTarget string, n *maelstrom.Node, msgStoreAddr *map[int
 
 	// Get slice of new messages and update our stored messages
 	newMessages := make([]int, 0)
-	for _, signal := range body["messages"].([]int) {
+	for _, rawSignal := range body["messages"].([]interface{}) {
+		signal := int(rawSignal.(float64))
 		_, seenBefore := (*msgStoreAddr)[signal]
 		if !seenBefore {
 			newMessages = append(newMessages, signal)
@@ -142,10 +141,10 @@ func main() {
 		// Grab all signals contained in message
 		signals := make([]int, 0)
 		signals = append(signals, int(body["message"].(float64)))
-		otherMsgs, otherMsgsPresent := body["otherMessages"].([]int)
+		otherMsgs, otherMsgsPresent := body["otherMessages"].([]interface{})
 		if otherMsgsPresent {
 			for _, other := range otherMsgs {
-				signals = append(signals, other)
+				signals = append(signals, int(other.(float64)))
 			}
 		}
 
@@ -163,13 +162,9 @@ func main() {
 		srcHash, hashPresent := body["stateHash"]
 		ourHash := hashState(&msgStore)
 
-		// If no hash and we've seen all signals in cur message, then we're done
-		if !hashPresent && len(newSignals) < 1 {
-			return nil
-		}
-
 		// Check if we need to sync before broadcasting updates
 		if hashPresent {
+			logger.Printf("from: %s msg_id: %d Our hash %s their hash %s\n", msg.Src, int(body["msg_id"].(float64)), ourHash, srcHash.(string))
 			// If hashes don't match, trigger sync
 			if ourHash != srcHash.(string) {
 				var err error
@@ -188,6 +183,10 @@ func main() {
 					ourHash = hashState(&msgStore)
 				}
 			}
+		}
+
+		if len(newSignals) < 1 {
+			return nil
 		}
 
 		// Broadcast new signals to all neighbors
@@ -219,7 +218,8 @@ func main() {
 		response, keyPresent := body["read_response"]
 		if !keyPresent {
 			return nil
-		} else if response == 'Y' {
+		} else if response.(string) == "Y" {
+			logger.Printf("from: %s msg_id: %d No need to respond to second read msg\n", msg.Src, int(body["msg_id"].(float64)))
 			return nil
 		}
 
@@ -270,6 +270,8 @@ func main() {
 			"type": "topology_ok",
 		})
 	})
+
+	logger.Printf("Starting up worker %s !!!\n", n.ID())
 
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
